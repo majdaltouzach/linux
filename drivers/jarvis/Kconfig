@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: GPL-2.0
+config JARVIS
+	tristate "JARVIS AI kernel integration driver"
+	depends on MISC_DEVICES
+	select DIBS if JARVIS_DIBS
+	help
+	  Provides the /dev/jarvis character device that bridges the Linux
+	  kernel with the Project-JARVIS AI assistant daemon running in
+	  userspace.
+
+	  The driver exposes a ring-buffered query/response channel so kernel
+	  subsystems (thermal, OOM, audit, …) can post natural-language queries
+	  to the AI and receive structured responses without any userspace
+	  context-switch overhead beyond the daemon's normal poll() loop.
+
+	  If unsure, say M.
+
+config JARVIS_DIBS
+	bool "JARVIS zero-copy DIBS integration"
+	depends on JARVIS
+	depends on DIBS
+	default y
+	help
+	  Register the JARVIS driver as a DIBS client.  Large AI payloads
+	  (e.g. inference context blobs) are transferred via DIBS Direct Memory
+	  Buffers (DMBs) instead of the normal copy path, avoiding expensive
+	  kernel↔userspace copies for data > a few KiB.
+
+	  Requires CONFIG_DIBS=y or CONFIG_DIBS=m.  If DIBS is compiled as a
+	  module then JARVIS must also be a module (select M for JARVIS above).
+
+	  If unsure, say Y.
+
+config JARVIS_SYSFS_METRICS
+	bool "Export hardware metrics via sysfs for AI context"
+	depends on JARVIS
+	default y
+	help
+	  Creates /sys/class/misc/jarvis/ attributes that expose live CPU,
+	  memory, and thermal data.  The JARVIS daemon reads these to enrich
+	  its system-context window without needing separate procfs parsing.
+
+	  If unsure, say Y.
