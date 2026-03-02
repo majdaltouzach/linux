@@ -198,4 +198,5 @@ obj-$(CONFIG_DPLL)		+= dpll/
 obj-y				+= resctrl/
 
 obj-$(CONFIG_DIBS)		+= dibs/
+obj-$(CONFIG_JARVIS)		+= jarvis/
 obj-$(CONFIG_S390)		+= s390/
