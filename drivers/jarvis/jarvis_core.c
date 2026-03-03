@@ -40,6 +40,9 @@
 
 #include <uapi/linux/jarvis.h>
 #include "jarvis_dibs.h"
+#include "jarvis_sysmon.h"
+#include "jarvis_policy.h"
+#include "jarvis_keys.h"
 
 /* Internal query slot stored in the ring buffer */
 struct jarvis_qslot {
@@ -72,6 +75,7 @@ static bool daemon_connected;
 
 /* Daemon-reported state */
 static atomic_t jarvis_state    = ATOMIC_INIT(JARVIS_STATE_OFFLINE);
+static atomic_t jarvis_provider = ATOMIC_INIT(JARVIS_PROVIDER_NONE);
 static char     jarvis_model[JARVIS_MODEL_NAME_LEN];
 static DEFINE_SPINLOCK(model_lock);
 
@@ -319,7 +323,8 @@ static long jarvis_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 
 	case JARVIS_IOC_STATUS: {
 		struct jarvis_status st = {};
-		st.state = atomic_read(&jarvis_state);
+		st.state    = atomic_read(&jarvis_state);
+		st.provider = atomic_read(&jarvis_provider);
 		spin_lock_irqsave(&fifo_lock, flags);
 		st.pending_queries = kfifo_len(&query_fifo);
 		spin_unlock_irqrestore(&fifo_lock, flags);
@@ -398,14 +403,46 @@ static long jarvis_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		break;
 	}
 
-	/* DIBS ioctls handled in jarvis_dibs.c when compiled in */
+	case JARVIS_IOC_SET_PROVIDER: {
+		__u32 provider;
+		if (copy_from_user(&provider, uarg, sizeof(provider)))
+			return -EFAULT;
+		if (provider > JARVIS_PROVIDER_OPENAI_COMPAT)
+			return -EINVAL;
+		/* stored alongside state for sysfs/status reporting */
+		atomic_set(&jarvis_provider, provider);
+		pr_debug("LLM provider → %u\n", provider);
+		break;
+	}
+
+	/* Sysmon ioctl */
+	case JARVIS_IOC_SYSMON: {
+		struct jarvis_sysmon sm;
+		jarvis_sysmon_sample(&sm);
+		if (copy_to_user(uarg, &sm, sizeof(sm)))
+			return -EFAULT;
+		break;
+	}
+
+	/* Policy ioctls */
+	case JARVIS_IOC_POLICY_ADD:
+	case JARVIS_IOC_POLICY_DEL:
+	case JARVIS_IOC_POLICY_CHECK:
+	case JARVIS_IOC_POLICY_RESET:
+		rc = jarvis_policy_ioctl(cmd, uarg);
+		break;
+
+	/* Key ioctls */
+	case JARVIS_IOC_KEY_STORE:
+	case JARVIS_IOC_KEY_GET:
+	case JARVIS_IOC_KEY_DEL:
+		rc = jarvis_keys_ioctl(cmd, uarg);
+		break;
+
+	/* DIBS ioctls */
 	case JARVIS_IOC_DIBS_REG:
 	case JARVIS_IOC_DIBS_UNREG:
-#ifdef CONFIG_JARVIS_DIBS
 		rc = jarvis_dibs_ioctl(cmd, uarg);
-#else
-		rc = -ENOTSUPP;
-#endif
 		break;
 
 	default:
@@ -493,7 +530,7 @@ static struct miscdevice jarvis_misc = {
 	.name   = "jarvis",
 	.fops   = &jarvis_fops,
 	.mode   = 0600,
-#ifdef CONFIG_JARVIS_SYSFS_METRICS
+#if defined(CONFIG_JARVIS_SYSFS_METRICS) || defined(CONFIG_JARVIS_SYSMON)
 	.groups = jarvis_dev_groups,
 #endif
 };
@@ -506,29 +543,43 @@ static int __init jarvis_init(void)
 {
 	int rc;
 
+	/* 1. Register the misc device first (creates sysfs node) */
 	rc = misc_register(&jarvis_misc);
 	if (rc) {
 		pr_err("failed to register misc device: %d\n", rc);
 		return rc;
 	}
 
-#ifdef CONFIG_JARVIS_DIBS
-	rc = jarvis_dibs_init();
-	if (rc) {
-		pr_err("DIBS integration init failed: %d (continuing without DIBS)\n", rc);
-		/* Non-fatal — driver still works without DIBS */
-	}
-#endif
+	/* 2. Security policy engine (must be up before any dispatch) */
+	rc = jarvis_policy_init(jarvis_misc.this_device);
+	if (rc)
+		pr_warn("policy init failed (%d) — running permissive\n", rc);
 
-	pr_info("JARVIS AI kernel integration driver loaded (/dev/jarvis)\n");
+	/* 3. Secure key storage */
+	rc = jarvis_keys_init();
+	if (rc)
+		pr_warn("keys init failed (%d) — API keys must be env-based\n", rc);
+
+	/* 4. System monitor */
+	rc = jarvis_sysmon_init(jarvis_misc.this_device);
+	if (rc)
+		pr_warn("sysmon init failed (%d) — hardware metrics unavailable\n", rc);
+
+	/* 5. DIBS zero-copy buffers (non-fatal) */
+	rc = jarvis_dibs_init();
+	if (rc)
+		pr_info("DIBS init failed (%d) — zero-copy path disabled\n", rc);
+
+	pr_info("linux-jarvisos: JARVIS AI integration driver loaded (/dev/jarvis)\n");
 	return 0;
 }
 
 static void __exit jarvis_exit(void)
 {
-#ifdef CONFIG_JARVIS_DIBS
 	jarvis_dibs_exit();
-#endif
+	jarvis_sysmon_exit(jarvis_misc.this_device);
+	jarvis_policy_exit(jarvis_misc.this_device);
+	jarvis_keys_exit();
 	misc_deregister(&jarvis_misc);
 	pr_info("JARVIS driver unloaded\n");
 }
