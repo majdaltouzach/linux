@@ -1,43 +1,108 @@
 # SPDX-License-Identifier: GPL-2.0
+
+# linux-jarvisos: AI-integrated Linux kernel
+# All JARVIS sub-options depend on the core JARVIS driver.
+
 config JARVIS
 	tristate "JARVIS AI kernel integration driver"
 	depends on MISC_DEVICES
-	select DIBS if JARVIS_DIBS
 	help
-	  Provides the /dev/jarvis character device that bridges the Linux
-	  kernel with the Project-JARVIS AI assistant daemon running in
-	  userspace.
+	  Core driver for linux-jarvisos.  Exposes /dev/jarvis as a misc
+	  character device providing a ring-buffered query/response channel
+	  between the kernel and the Project-JARVIS AI assistant daemon.
 
-	  The driver exposes a ring-buffered query/response channel so kernel
-	  subsystems (thermal, OOM, audit, …) can post natural-language queries
-	  to the AI and receive structured responses without any userspace
-	  context-switch overhead beyond the daemon's normal poll() loop.
+	  Kernel subsystems (thermal, OOM, audit, …) can call
+	  jarvis_post_query() to send natural-language events directly to
+	  the AI without leaving kernel context.  The daemon polls /dev/jarvis,
+	  runs inference (local Ollama or cloud API), and replies via ioctl.
+
+	  Enable all sub-options below for full AI–OS integration.
 
 	  If unsure, say M.
 
 config JARVIS_DIBS
-	bool "JARVIS zero-copy DIBS integration"
+	bool "JARVIS zero-copy DIBS shared-memory integration"
 	depends on JARVIS
 	depends on DIBS
 	default y
 	help
-	  Register the JARVIS driver as a DIBS client.  Large AI payloads
-	  (e.g. inference context blobs) are transferred via DIBS Direct Memory
-	  Buffers (DMBs) instead of the normal copy path, avoiding expensive
-	  kernel↔userspace copies for data > a few KiB.
+	  Register the JARVIS driver as a DIBS (Direct Internal Buffer Sharing)
+	  client.  The AI daemon can pre-register DMBs (Direct Memory Buffers)
+	  so large inference payloads are transferred zero-copy between kernel
+	  and userspace — critical for on-device LLM inference throughput.
 
-	  Requires CONFIG_DIBS=y or CONFIG_DIBS=m.  If DIBS is compiled as a
-	  module then JARVIS must also be a module (select M for JARVIS above).
+	  Requires CONFIG_DIBS=y or =m.  If DIBS is a module, JARVIS must
+	  also be a module.
 
 	  If unsure, say Y.
 
-config JARVIS_SYSFS_METRICS
-	bool "Export hardware metrics via sysfs for AI context"
+config JARVIS_SYSMON
+	bool "JARVIS system monitor — hardware metrics for model selection"
 	depends on JARVIS
 	default y
 	help
-	  Creates /sys/class/misc/jarvis/ attributes that expose live CPU,
-	  memory, and thermal data.  The JARVIS daemon reads these to enrich
-	  its system-context window without needing separate procfs parsing.
+	  Provides real-time CPU, memory, and thermal metrics via:
+	    - JARVIS_IOC_SYSMON ioctl (struct jarvis_sysmon snapshot)
+	    - /sys/class/misc/jarvis/sysmon/{cpu_load,mem_avail,thermal,…}
+
+	  The JARVIS daemon uses these to decide:
+	    - Whether to run Ollama locally or fall back to a cloud API
+	    - Which Ollama model fits the available VRAM / RAM
+	    - Whether to throttle inference under thermal pressure
+
+	  Replaces the older CONFIG_JARVIS_SYSFS_METRICS option.
+
+	  If unsure, say Y.
+
+# Legacy alias so old .config files still work
+config JARVIS_SYSFS_METRICS
+	bool
+	depends on JARVIS
+	select JARVIS_SYSMON
+
+config JARVIS_POLICY
+	bool "JARVIS AI action security policy engine"
+	depends on JARVIS
+	default y
+	help
+	  Tiered security policy for every MCP tool call the AI dispatches:
+
+	    SAFE      — silent execution
+	    ELEVATED  — execution + kernel audit log entry
+	    DANGEROUS — blocked until the user confirms (kernel posts a
+	                JARVIS_QTYPE_POLICY_REQ query to the daemon)
+	    FORBIDDEN — unconditionally blocked
+
+	  The policy table ships with sane defaults (ShellMCP → DANGEROUS,
+	  FileSystemMCP reads → SAFE, writes → ELEVATED, deletes → DANGEROUS)
+	  and is tunable at runtime via JARVIS_IOC_POLICY_* ioctls or the
+	  /sys/class/misc/jarvis/policy/policy_table sysfs file.
+
+	  Per-rule rate limiting is also enforced here.
+
+	  Disabling this makes the AI fully permissive — not recommended for
+	  production systems.
+
+	  If unsure, say Y.
+
+config JARVIS_KEYS
+	bool "JARVIS secure API-key storage via kernel keyring"
+	depends on JARVIS
+	depends on KEYS
+	default y
+	help
+	  Stores LLM provider API keys (Claude, OpenAI, OpenRouter, …) in a
+	  dedicated "_jarvis" kernel keyring so they never touch disk or
+	  environment variables.
+
+	  At boot an admin (or the jarvis-keyctl helper) writes keys via
+	  JARVIS_IOC_KEY_STORE; the JARVIS daemon retrieves them via
+	  JARVIS_IOC_KEY_GET at startup and passes them to the LLM provider.
+
+	  The jarvis_key_lookup() function is also exported for other kernel
+	  modules that need authenticated access to AI infrastructure (e.g. a
+	  future kernel-level HTTPS transport).
+
+	  Requires CONFIG_KEYS=y.
 
 	  If unsure, say Y.
