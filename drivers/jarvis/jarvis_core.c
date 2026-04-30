@@ -329,7 +329,7 @@ static long jarvis_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		st.pending_queries = kfifo_len(&query_fifo);
 		spin_unlock_irqrestore(&fifo_lock, flags);
 		spin_lock_irqsave(&model_lock, flags);
-		strlcpy(st.model_name, jarvis_model, sizeof(st.model_name));
+		strscpy(st.model_name, jarvis_model, sizeof(st.model_name));
 		st.model_loaded = (jarvis_model[0] != '\0') ? 1 : 0;
 		spin_unlock_irqrestore(&model_lock, flags);
 		if (copy_to_user(uarg, &st, sizeof(st)))
@@ -353,7 +353,7 @@ static long jarvis_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		if (copy_from_user(name, uarg, sizeof(name) - 1))
 			return -EFAULT;
 		spin_lock_irqsave(&model_lock, flags);
-		strlcpy(jarvis_model, name, sizeof(jarvis_model));
+		strscpy(jarvis_model, name, sizeof(jarvis_model));
 		spin_unlock_irqrestore(&model_lock, flags);
 		pr_info("AI model: %s\n", jarvis_model);
 		break;
@@ -480,7 +480,7 @@ static ssize_t model_show(struct device *dev, struct device_attribute *attr,
 	char name[JARVIS_MODEL_NAME_LEN];
 
 	spin_lock_irqsave(&model_lock, flags);
-	strlcpy(name, jarvis_model, sizeof(name));
+	strscpy(name, jarvis_model, sizeof(name));
 	spin_unlock_irqrestore(&model_lock, flags);
 
 	return sysfs_emit(buf, "%s\n", name[0] ? name : "(none)");

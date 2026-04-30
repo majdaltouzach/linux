@@ -273,7 +273,7 @@ long jarvis_policy_ioctl(unsigned int cmd, void __user *uarg)
 			return -ENOMEM;
 		}
 
-		strlcpy(rule->pattern, entry.pattern, sizeof(rule->pattern));
+		strscpy(rule->pattern, entry.pattern, sizeof(rule->pattern));
 		rule->tier             = entry.tier;
 		rule->ratelimit_per_min = entry.ratelimit_per_min;
 		spin_lock_init(&rule->rl_lock);
@@ -416,7 +416,7 @@ int jarvis_policy_load_defaults(void)
 		if (!rule)
 			return -ENOMEM;
 
-		strlcpy(rule->pattern, jarvis_default_policy[i].pattern,
+		strscpy(rule->pattern, jarvis_default_policy[i].pattern,
 			sizeof(rule->pattern));
 		rule->tier              = jarvis_default_policy[i].tier;
 		rule->ratelimit_per_min = jarvis_default_policy[i].ratelimit_per_min;

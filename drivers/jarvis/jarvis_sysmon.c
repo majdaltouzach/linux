@@ -62,44 +62,45 @@ static void sample_memory(struct jarvis_sysmon *s)
 	s->swap_total_mb = ((u64)si.totalswap * si.mem_unit) >> 20;
 	s->swap_free_mb  = ((u64)si.freeswap  * si.mem_unit) >> 20;
 
-	/*
-	 * mem_avail ≈ free + reclaimable page-cache.
-	 * si_mem_available() is the kernel function behind /proc/meminfo's
-	 * MemAvailable — use it when available, otherwise approximate.
-	 */
-#if defined(si_mem_available)
+	/* mem_avail ≈ free + reclaimable page-cache (stable since 4.1) */
 	s->mem_avail_mb = (si_mem_available() * PAGE_SIZE) >> 20;
-#else
-	s->mem_avail_mb = s->mem_free_mb;
-#endif
 }
 
 static void sample_thermal(struct jarvis_sysmon *s)
 {
 #ifdef CONFIG_THERMAL
+	/*
+	 * thermal_zone_get_zone_by_name() is the stable exported API for
+	 * looking up a registered zone by its type string. There is no
+	 * exported iterator for all zones from a module; probe well-known
+	 * x86 zone names instead. Zones not present return ERR_PTR(-ENODEV).
+	 */
+	static const char * const known_zones[] = {
+		"x86_pkg_temp", "acpitz", "k10temp", "coretemp",
+		"pch_skylake", "pch_cannonlake", "pch_cometlake",
+		"INT3400 Thermal", "B0D4", "B0D3",
+		NULL
+	};
 	struct thermal_zone_device *tz;
-	int idx = 0;
-	int temp, crit = 0;
+	int idx = 0, i, temp, crit = 0;
 
 	s->thermal_count = 0;
 	memset(s->thermal_celsius, 0, sizeof(s->thermal_celsius));
 
-	/* Iterate registered thermal zones */
-	for_each_zone(tz) {
-		if (idx >= JARVIS_THERMAL_MAX_ZONES)
-			break;
-		if (!tz || thermal_zone_get_temp(tz, &temp))
+	for (i = 0; known_zones[i] && idx < JARVIS_THERMAL_MAX_ZONES; i++) {
+		tz = thermal_zone_get_zone_by_name(known_zones[i]);
+		if (IS_ERR_OR_NULL(tz))
+			continue;
+		if (thermal_zone_get_temp(tz, &temp))
 			continue;
 
-		/* Kernel reports in millidegrees Celsius */
 		s->thermal_celsius[idx++] = temp / 1000;
 
-		/* Track the highest critical trip point */
 		{
 			struct thermal_trip trip;
-			int i;
-			for (i = 0; i < thermal_zone_get_num_trips(tz); i++) {
-				if (thermal_zone_get_trip(tz, i, &trip))
+			int j;
+			for (j = 0; j < thermal_zone_get_num_trips(tz); j++) {
+				if (thermal_zone_get_trip(tz, j, &trip))
 					continue;
 				if (trip.type == THERMAL_TRIP_CRITICAL &&
 				    trip.temperature / 1000 > crit)
