@@ -238,6 +238,27 @@ struct jarvis_key_op {
 	__u32 __pad;
 };
 
+/**
+ * struct jarvis_respond_ioc - ioctl argument for JARVIS_IOC_RESPOND
+ *
+ * struct jarvis_response exceeds the 14-bit ioctl size field (16383 bytes
+ * max), so the response payload is passed by user pointer instead.
+ *
+ * @id:       matching jarvis_query.id
+ * @status:   0 = OK, non-zero = AI error
+ * @flags:    reserved, zero
+ * @len:      bytes at *data_ptr (must be ≤ JARVIS_MAX_RESP_LEN)
+ * @data_ptr: user pointer to response payload buffer
+ */
+struct jarvis_respond_ioc {
+	__u64 id;
+	__u32 status;
+	__u32 flags;
+	__u32 len;
+	__u32 __pad;
+	__u64 data_ptr;
+};
+
 /* -----------------------------------------------------------------------
  * ioctl command table
  *
@@ -252,7 +273,7 @@ struct jarvis_key_op {
 #define JARVIS_IOC_STATUS        _IOR(JARVIS_IOC_MAGIC,  1, struct jarvis_status)
 #define JARVIS_IOC_SET_STATE     _IOW(JARVIS_IOC_MAGIC,  2, __u32)
 #define JARVIS_IOC_SET_MODEL     _IOW(JARVIS_IOC_MAGIC,  3, char[JARVIS_MODEL_NAME_LEN])
-#define JARVIS_IOC_RESPOND       _IOW(JARVIS_IOC_MAGIC,  4, struct jarvis_response)
+#define JARVIS_IOC_RESPOND       _IOW(JARVIS_IOC_MAGIC,  4, struct jarvis_respond_ioc)
 #define JARVIS_IOC_DIBS_REG      _IOWR(JARVIS_IOC_MAGIC, 5, struct jarvis_dibs_reg)
 #define JARVIS_IOC_DIBS_UNREG    _IOW(JARVIS_IOC_MAGIC,  6, __u32)
 #define JARVIS_IOC_FLUSH         _IO(JARVIS_IOC_MAGIC,   7)

@@ -46,11 +46,10 @@ static DEFINE_SPINLOCK(slots_lock);
  * DIBS client callbacks
  * --------------------------------------------------------------------- */
 
-static int jarvis_dibs_add_dev(struct dibs_dev *dibs)
+static void jarvis_dibs_add_dev(struct dibs_dev *dibs)
 {
 	pr_debug("DIBS device added: fabric 0x%04x\n",
 		 dibs->ops->get_fabric_id(dibs));
-	return 0;
 }
 
 static void jarvis_dibs_del_dev(struct dibs_dev *dibs)
@@ -58,22 +57,9 @@ static void jarvis_dibs_del_dev(struct dibs_dev *dibs)
 	pr_debug("DIBS device removed\n");
 }
 
-static void jarvis_dibs_rx(struct dibs_dev *dibs, struct dibs_dmb *dmb,
-			   u32 offset, u32 len)
-{
-	/*
-	 * Inbound data notification from a remote DIBS sender.
-	 * For future use — e.g. receiving inference results pushed by an
-	 * accelerator into a shared DMB.
-	 */
-	pr_debug("rx: dmb tok %llu offset %u len %u\n",
-		 (unsigned long long)dmb->dmb_tok, offset, len);
-}
-
 static const struct dibs_client_ops jarvis_dibs_ops = {
 	.add_dev = jarvis_dibs_add_dev,
 	.del_dev = jarvis_dibs_del_dev,
-	.rx      = jarvis_dibs_rx,
 };
 
 static struct dibs_client jarvis_dibs_client = {

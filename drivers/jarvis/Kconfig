@@ -5,7 +5,6 @@
 
 config JARVIS
 	tristate "JARVIS AI kernel integration driver"
-	depends on MISC_DEVICES
 	help
 	  Core driver for linux-jarvisos.  Exposes /dev/jarvis as a misc
 	  character device providing a ring-buffered query/response channel

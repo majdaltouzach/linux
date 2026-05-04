@@ -360,15 +360,28 @@ static long jarvis_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	}
 
 	case JARVIS_IOC_RESPOND: {
+		struct jarvis_respond_ioc ioc;
 		struct jarvis_response *resp;
 		struct jarvis_pending *pend;
 		bool found = false;
 
-		resp = kmalloc(sizeof(*resp), GFP_KERNEL);
+		if (copy_from_user(&ioc, uarg, sizeof(ioc)))
+			return -EFAULT;
+		if (ioc.len > JARVIS_MAX_RESP_LEN)
+			return -EINVAL;
+
+		resp = kzalloc(sizeof(*resp), GFP_KERNEL);
 		if (!resp)
 			return -ENOMEM;
 
-		if (copy_from_user(resp, uarg, sizeof(*resp))) {
+		resp->id     = ioc.id;
+		resp->status = ioc.status;
+		resp->flags  = ioc.flags;
+		resp->len    = ioc.len;
+
+		if (ioc.len && copy_from_user(resp->data,
+					      (void __user *)(uintptr_t)ioc.data_ptr,
+					      ioc.len)) {
 			kfree(resp);
 			return -EFAULT;
 		}
@@ -385,11 +398,10 @@ static long jarvis_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		}
 		spin_unlock_irqrestore(&pending_lock, flags);
 
-		kfree(resp);
-
 		if (!found)
 			pr_debug("response for unknown query id %llu\n",
 				 (unsigned long long)resp->id);
+		kfree(resp);
 		break;
 	}
 
@@ -453,9 +465,9 @@ static long jarvis_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 }
 
 /* -----------------------------------------------------------------------
- * sysfs attributes (when CONFIG_JARVIS_SYSFS_METRICS=y)
+ * sysfs attributes
  * --------------------------------------------------------------------- */
-#ifdef CONFIG_JARVIS_SYSFS_METRICS
+#if defined(CONFIG_JARVIS_SYSFS_METRICS) || defined(CONFIG_JARVIS_SYSMON)
 
 static ssize_t state_show(struct device *dev, struct device_attribute *attr,
 			  char *buf)
@@ -509,7 +521,7 @@ static struct attribute *jarvis_dev_attrs[] = {
 };
 ATTRIBUTE_GROUPS(jarvis_dev);
 
-#endif /* CONFIG_JARVIS_SYSFS_METRICS */
+#endif /* CONFIG_JARVIS_SYSFS_METRICS || CONFIG_JARVIS_SYSMON */
 
 /* -----------------------------------------------------------------------
  * Misc device registration

@@ -97,15 +97,10 @@ static void sample_thermal(struct jarvis_sysmon *s)
 		s->thermal_celsius[idx++] = temp / 1000;
 
 		{
-			struct thermal_trip trip;
-			int j;
-			for (j = 0; j < thermal_zone_get_num_trips(tz); j++) {
-				if (thermal_zone_get_trip(tz, j, &trip))
-					continue;
-				if (trip.type == THERMAL_TRIP_CRITICAL &&
-				    trip.temperature / 1000 > crit)
-					crit = trip.temperature / 1000;
-			}
+			int crit_temp;
+			if (!thermal_zone_get_crit_temp(tz, &crit_temp) &&
+			    crit_temp / 1000 > crit)
+				crit = crit_temp / 1000;
 		}
 	}
 	s->thermal_count = idx;

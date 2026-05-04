@@ -67,6 +67,7 @@ static struct key *jarvis_keyring;
  */
 int jarvis_key_lookup(const char *id, char *buf, size_t buflen)
 {
+	key_ref_t key_ref;
 	struct key *key;
 	const struct user_key_payload *payload;
 	int rc;
@@ -74,16 +75,18 @@ int jarvis_key_lookup(const char *id, char *buf, size_t buflen)
 	if (!jarvis_keyring)
 		return -ENXIO;
 
-	key = keyring_search(make_key_ref(jarvis_keyring, 1),
-			     &key_type_user, id, true);
-	if (IS_ERR(key))
-		return PTR_ERR(key);
+	key_ref = keyring_search(make_key_ref(jarvis_keyring, 1),
+				 &key_type_user, id, true);
+	if (IS_ERR(key_ref))
+		return PTR_ERR(key_ref);
+
+	key = key_ref_to_ptr(key_ref);
 
 	rcu_read_lock();
 	payload = user_key_payload_rcu(key);
 	if (!payload || payload->datalen == 0) {
 		rcu_read_unlock();
-		key_put(key);
+		key_ref_put(key_ref);
 		return -ENODATA;
 	}
 
@@ -92,7 +95,7 @@ int jarvis_key_lookup(const char *id, char *buf, size_t buflen)
 	buf[rc] = '\0';
 	rcu_read_unlock();
 
-	key_put(key);
+	key_ref_put(key_ref);
 	return rc;
 }
 EXPORT_SYMBOL_GPL(jarvis_key_lookup);
