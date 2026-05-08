@@ -16,7 +16,9 @@
  *
  * Security
  * --------
- * Only CAP_SYS_ADMIN may open /dev/jarvis (O_RDWR) as the AI daemon.
+ * Members of the jarvis group may open /dev/jarvis (O_RDWR); access is
+ * enforced by udev device ownership (GROUP=jarvis MODE=0660) so no
+ * capability is required at the VFS layer.
  * Kernel-internal callers use jarvis_post_query() directly.
  *
  * Copyright (c) 2025 JARVISos Contributors
@@ -219,9 +221,6 @@ EXPORT_SYMBOL_GPL(jarvis_query_sync);
 
 static int jarvis_open(struct inode *inode, struct file *filp)
 {
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
-
 	mutex_lock(&daemon_lock);
 	if (daemon_connected) {
 		mutex_unlock(&daemon_lock);
@@ -406,8 +405,6 @@ static long jarvis_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	}
 
 	case JARVIS_IOC_FLUSH: {
-		if (!capable(CAP_SYS_ADMIN))
-			return -EPERM;
 		spin_lock_irqsave(&fifo_lock, flags);
 		kfifo_reset(&query_fifo);
 		spin_unlock_irqrestore(&fifo_lock, flags);
