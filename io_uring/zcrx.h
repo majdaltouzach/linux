@@ -97,6 +97,9 @@ static inline void io_unregister_zcrx(struct io_ring_ctx *ctx)
 static inline void io_terminate_zcrx(struct io_ring_ctx *ctx)
 {
 }
+static inline void io_terminate_zcrx(struct io_ring_ctx *ctx)
+{
+}
 static inline int io_zcrx_recv(struct io_kiocb *req, struct io_zcrx_ifq *ifq,
 			       struct socket *sock, unsigned int flags,
 			       unsigned issue_flags, unsigned int *len)

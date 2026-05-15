@@ -255,6 +255,8 @@ static vm_fault_t fb_deferred_io_fault(struct vm_fault *vmf)
 
 	mutex_unlock(&fbdefio_state->lock);
 
+	mutex_unlock(&fbdefio_state->lock);
+
 	vmf->page = page;
 
 	return 0;
@@ -430,6 +432,8 @@ int fb_deferred_io_init(struct fb_info *info)
 	INIT_DELAYED_WORK(&info->deferred_work, fb_deferred_io_work);
 	if (fbdefio->delay == 0) /* set a default of 1 s */
 		fbdefio->delay = HZ;
+
+	info->fbdefio_state = fbdefio_state;
 
 	info->fbdefio_state = fbdefio_state;
 
