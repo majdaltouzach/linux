@@ -14,7 +14,6 @@
 #include <linux/types.h>
 #include <linux/input.h>
 #include <linux/acpi.h>
-#include <linux/platform_device.h>
 #include <acpi/button.h>
 
 #define SURFACE_PRO3_BUTTON_HID		"MSHW0028"
@@ -73,10 +72,9 @@ struct surface_button {
 	bool suspended;
 };
 
-static void surface_button_notify(acpi_handle handle, u32 event, void *data)
+static void surface_button_notify(struct acpi_device *device, u32 event)
 {
-	struct device *dev = data;
-	struct surface_button *button = dev_get_drvdata(dev);
+	struct surface_button *button = acpi_driver_data(device);
 	struct input_dev *input;
 	int key_code = KEY_RESERVED;
 	bool pressed = false;
@@ -111,17 +109,18 @@ static void surface_button_notify(acpi_handle handle, u32 event, void *data)
 		key_code = KEY_VOLUMEDOWN;
 		break;
 	case SURFACE_BUTTON_NOTIFY_TABLET_MODE:
-		dev_warn_once(dev, "Tablet mode is not supported\n");
+		dev_warn_once(&device->dev, "Tablet mode is not supported\n");
 		break;
 	default:
-		dev_info_ratelimited(dev, "Unsupported event [0x%x]\n", event);
+		dev_info_ratelimited(&device->dev,
+				     "Unsupported event [0x%x]\n", event);
 		break;
 	}
 	input = button->input;
 	if (key_code == KEY_RESERVED)
 		return;
 	if (pressed)
-		pm_wakeup_dev_event(dev, 0, button->suspended);
+		pm_wakeup_dev_event(&device->dev, 0, button->suspended);
 	if (button->suspended)
 		return;
 	input_report_key(input, key_code, pressed?1:0);
@@ -131,7 +130,8 @@ static void surface_button_notify(acpi_handle handle, u32 event, void *data)
 #ifdef CONFIG_PM_SLEEP
 static int surface_button_suspend(struct device *dev)
 {
-	struct surface_button *button = dev_get_drvdata(dev);
+	struct acpi_device *device = to_acpi_device(dev);
+	struct surface_button *button = acpi_driver_data(device);
 
 	button->suspended = true;
 	return 0;
@@ -139,7 +139,8 @@ static int surface_button_suspend(struct device *dev)
 
 static int surface_button_resume(struct device *dev)
 {
-	struct surface_button *button = dev_get_drvdata(dev);
+	struct acpi_device *device = to_acpi_device(dev);
+	struct surface_button *button = acpi_driver_data(device);
 
 	button->suspended = false;
 	return 0;
@@ -154,8 +155,9 @@ static int surface_button_resume(struct device *dev)
  * Returns true if the driver should bind to this device, i.e. the device is
  * either MSWH0028 (Pro 3) or MSHW0040 on a Pro 4 or Book 1.
  */
-static bool surface_button_check_MSHW0040(struct device *dev, acpi_handle handle)
+static bool surface_button_check_MSHW0040(struct acpi_device *dev)
 {
+	acpi_handle handle = dev->handle;
 	union acpi_object *result;
 	u64 oem_platform_rev = 0;	// valid revisions are nonzero
 
@@ -177,15 +179,14 @@ static bool surface_button_check_MSHW0040(struct device *dev, acpi_handle handle
 		ACPI_FREE(result);
 	}
 
-	dev_dbg(dev, "OEM Platform Revision %llu\n", oem_platform_rev);
+	dev_dbg(&dev->dev, "OEM Platform Revision %llu\n", oem_platform_rev);
 
 	return oem_platform_rev == 0;
 }
 
 
-static int surface_button_probe(struct platform_device *pdev)
+static int surface_button_add(struct acpi_device *device)
 {
-	struct acpi_device *device = ACPI_COMPANION(&pdev->dev);
 	struct surface_button *button;
 	struct input_dev *input;
 	const char *hid = acpi_device_hid(device);
@@ -195,14 +196,14 @@ static int surface_button_probe(struct platform_device *pdev)
 	    strlen(SURFACE_BUTTON_OBJ_NAME)))
 		return -ENODEV;
 
-	if (!surface_button_check_MSHW0040(&pdev->dev, device->handle))
+	if (!surface_button_check_MSHW0040(device))
 		return -ENODEV;
 
 	button = kzalloc_obj(struct surface_button);
 	if (!button)
 		return -ENOMEM;
 
-	platform_set_drvdata(pdev, button);
+	device->driver_data = button;
 	button->input = input = input_allocate_device();
 	if (!input) {
 		error = -ENOMEM;
@@ -215,7 +216,7 @@ static int surface_button_probe(struct platform_device *pdev)
 	input->name = acpi_device_name(device);
 	input->phys = button->phys;
 	input->id.bustype = BUS_HOST;
-	input->dev.parent = &pdev->dev;
+	input->dev.parent = &device->dev;
 	input_set_capability(input, EV_KEY, KEY_POWER);
 	input_set_capability(input, EV_KEY, KEY_LEFTMETA);
 	input_set_capability(input, EV_KEY, KEY_VOLUMEUP);
@@ -225,17 +226,8 @@ static int surface_button_probe(struct platform_device *pdev)
 	if (error)
 		goto err_free_input;
 
-	device_init_wakeup(&pdev->dev, true);
-
-	error = acpi_dev_install_notify_handler(device, ACPI_DEVICE_NOTIFY,
-						surface_button_notify, &pdev->dev);
-	if (error) {
-		device_init_wakeup(&pdev->dev, false);
-		input_unregister_device(input);
-		goto err_free_button;
-	}
-
-	dev_info(&pdev->dev, "%s [%s]\n", acpi_device_name(device),
+	device_init_wakeup(&device->dev, true);
+	dev_info(&device->dev, "%s [%s]\n", acpi_device_name(device),
 		 acpi_device_bid(device));
 	return 0;
 
@@ -246,13 +238,11 @@ static int surface_button_probe(struct platform_device *pdev)
 	return error;
 }
 
-static void surface_button_remove(struct platform_device *pdev)
+static void surface_button_remove(struct acpi_device *device)
 {
-	struct surface_button *button = platform_get_drvdata(pdev);
+	struct surface_button *button = acpi_driver_data(device);
 
-	acpi_dev_remove_notify_handler(ACPI_COMPANION(&pdev->dev),
-				       ACPI_DEVICE_NOTIFY, surface_button_notify);
-	device_init_wakeup(&pdev->dev, false);
+	device_init_wakeup(&device->dev, false);
 	input_unregister_device(button->input);
 	kfree(button);
 }
@@ -260,14 +250,16 @@ static void surface_button_remove(struct platform_device *pdev)
 static SIMPLE_DEV_PM_OPS(surface_button_pm,
 		surface_button_suspend, surface_button_resume);
 
-static struct platform_driver surface_button_driver = {
-	.probe = surface_button_probe,
-	.remove = surface_button_remove,
-	.driver = {
-		.name = "surface_pro3_button",
-		.acpi_match_table = surface_button_device_ids,
-		.pm = &surface_button_pm,
+static struct acpi_driver surface_button_driver = {
+	.name = "surface_pro3_button",
+	.class = "SurfacePro3",
+	.ids = surface_button_device_ids,
+	.ops = {
+		.add = surface_button_add,
+		.remove = surface_button_remove,
+		.notify = surface_button_notify,
 	},
+	.drv.pm = &surface_button_pm,
 };
 
-module_platform_driver(surface_button_driver);
+module_acpi_driver(surface_button_driver);

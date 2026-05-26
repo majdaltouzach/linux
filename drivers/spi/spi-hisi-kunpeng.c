@@ -208,10 +208,7 @@ static void hisi_spi_flush_fifo(struct hisi_spi *hs)
 			break;
 		}
 
-	} while (hisi_spi_busy(hs) && --limit);
-
-	if (!limit)
-		dev_warn_ratelimited(hs->dev, "SPI busy timeout\n");
+	} while (hisi_spi_busy(hs) && limit--);
 }
 
 /* Disable the controller and all interrupts */

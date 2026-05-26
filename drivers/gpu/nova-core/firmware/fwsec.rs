@@ -10,8 +10,6 @@
 //! - The command to be run, as this firmware can perform several tasks ;
 //! - The ucode signature, so the GSP falcon can run FWSEC in HS mode.
 
-pub(crate) mod bootloader;
-
 use core::marker::PhantomData;
 
 use kernel::{
@@ -198,10 +196,6 @@ impl FalconDmaLoadable for FwsecFirmware {
     fn dmem_load_params(&self) -> FalconDmaLoadTarget {
         self.desc.dmem_load_params()
     }
-}
-
-impl FalconFirmware for FwsecFirmware {
-    type Target = Gsp;
 
     fn brom_params(&self) -> FalconBromParams {
         FalconBromParams {
@@ -214,6 +208,10 @@ impl FalconFirmware for FwsecFirmware {
     fn boot_addr(&self) -> u32 {
         0
     }
+}
+
+impl FalconFirmware for FwsecFirmware {
+    type Target = Gsp;
 }
 
 impl FirmwareObject<FwsecFirmware, Unsigned> {
@@ -387,10 +385,6 @@ impl FwsecFirmware {
     }
 
     /// Loads the FWSEC firmware into `falcon` and execute it.
-    ///
-    /// This must only be called on chipsets that do not need the FWSEC bootloader (i.e., where
-    /// [`Chipset::needs_fwsec_bootloader()`](crate::gpu::Chipset::needs_fwsec_bootloader) returns
-    /// `false`). On chipsets that do, use [`bootloader::FwsecFirmwareWithBl`] instead.
     pub(crate) fn run(
         &self,
         dev: &Device<device::Bound>,

@@ -76,8 +76,6 @@
 
 #define RSPI_RESET_NUM		2
 
-#define RSPI_MAX_SPEED_HZ	50000000
-
 struct rzv2h_rspi_best_clock {
 	struct clk *clk;
 	unsigned long clk_rate;
@@ -88,9 +86,9 @@ struct rzv2h_rspi_best_clock {
 };
 
 struct rzv2h_rspi_info {
-	void (*find_tclk_rate)(struct clk *clk, u32 hz,
+	void (*find_tclk_rate)(struct clk *clk, u32 hz, u8 spr_min, u8 spr_max,
 			       struct rzv2h_rspi_best_clock *best_clk);
-	void (*find_pclk_rate)(struct clk *clk, u32 hz,
+	void (*find_pclk_rate)(struct clk *clk, u32 hz, u8 spr_low, u8 spr_high,
 			       struct rzv2h_rspi_best_clock *best_clk);
 	const char *tclk_name;
 	unsigned int fifo_size;
@@ -413,6 +411,7 @@ static inline u32 rzv2h_rspi_calc_bitrate(unsigned long tclk_rate, u8 spr,
 }
 
 static void rzv2h_rspi_find_rate_variable(struct clk *clk, u32 hz,
+					  u8 spr_min, u8 spr_max,
 					  struct rzv2h_rspi_best_clock *best)
 {
 	long clk_rate, clk_min_rate, clk_max_rate;
@@ -463,7 +462,7 @@ static void rzv2h_rspi_find_rate_variable(struct clk *clk, u32 hz,
 		 * minimum SPR that is in the valid range.
 		 */
 		min_rate_spr = DIV_ROUND_CLOSEST(clk_min_rate, rate_div) - 1;
-		if (min_rate_spr > RSPI_SPBR_SPR_MAX)
+		if (min_rate_spr > spr_max)
 			continue;
 
 		/*
@@ -473,14 +472,14 @@ static void rzv2h_rspi_find_rate_variable(struct clk *clk, u32 hz,
 		 * maximum SPR that is in the valid range.
 		 */
 		max_rate_spr = DIV_ROUND_CLOSEST(clk_max_rate, rate_div) - 1;
-		if (max_rate_spr < RSPI_SPBR_SPR_MIN)
+		if (max_rate_spr < spr_min)
 			break;
 
-		if (min_rate_spr < RSPI_SPBR_SPR_MIN)
-			min_rate_spr = RSPI_SPBR_SPR_MIN;
+		if (min_rate_spr < spr_min)
+			min_rate_spr = spr_min;
 
-		if (max_rate_spr > RSPI_SPBR_SPR_MAX)
-			max_rate_spr = RSPI_SPBR_SPR_MAX;
+		if (max_rate_spr > spr_max)
+			max_rate_spr = spr_max;
 
 		for (spr = min_rate_spr; spr <= max_rate_spr; spr++) {
 			clk_rate = (spr + 1) * rate_div;
@@ -511,6 +510,7 @@ static void rzv2h_rspi_find_rate_variable(struct clk *clk, u32 hz,
 }
 
 static void rzv2h_rspi_find_rate_fixed(struct clk *clk, u32 hz,
+				       u8 spr_min, u8 spr_max,
 				       struct rzv2h_rspi_best_clock *best)
 {
 	unsigned long clk_rate;
@@ -543,7 +543,7 @@ static void rzv2h_rspi_find_rate_fixed(struct clk *clk, u32 hz,
 		 */
 		if (!spr && !brdv)
 			continue;
-		if (spr >= RSPI_SPBR_SPR_MIN && spr <= RSPI_SPBR_SPR_MAX)
+		if (spr >= spr_min && spr <= spr_max)
 			goto clock_found;
 	}
 
@@ -573,13 +573,15 @@ static u32 rzv2h_rspi_setup_clock(struct rzv2h_rspi_priv *rspi, u32 hz)
 	};
 	int ret;
 
-	rspi->info->find_tclk_rate(rspi->tclk, hz, &best_clock);
+	rspi->info->find_tclk_rate(rspi->tclk, hz, RSPI_SPBR_SPR_MIN,
+				   RSPI_SPBR_SPR_MAX, &best_clock);
 
 	if (best_clock.error && rspi->info->find_pclk_rate)
-		rspi->info->find_pclk_rate(rspi->pclk, hz, &best_clock);
+		rspi->info->find_pclk_rate(rspi->pclk, hz, RSPI_SPBR_SPR_MIN,
+					   RSPI_SPBR_SPR_MAX, &best_clock);
 
 	if (!best_clock.clk_rate)
-		return -EINVAL;
+		return 0;
 
 	ret = clk_set_rate(best_clock.clk, best_clock.clk_rate);
 	if (ret)
@@ -775,7 +777,13 @@ static int rzv2h_rspi_probe(struct platform_device *pdev)
 							   RSPI_SPBR_SPR_MAX,
 							   RSPI_SPCMD_BRDV_MAX);
 
-	controller->max_speed_hz = RSPI_MAX_SPEED_HZ;
+	tclk_rate = clk_round_rate(rspi->tclk, ULONG_MAX);
+	if (tclk_rate < 0)
+		return tclk_rate;
+
+	controller->max_speed_hz = rzv2h_rspi_calc_bitrate(tclk_rate,
+							   RSPI_SPBR_SPR_MIN,
+							   RSPI_SPCMD_BRDV_MIN);
 
 	controller->dma_tx = devm_dma_request_chan(dev, "tx");
 	if (IS_ERR(controller->dma_tx)) {
@@ -809,13 +817,6 @@ static const struct rzv2h_rspi_info rzv2h_info = {
 	.num_clks = 3,
 };
 
-static const struct rzv2h_rspi_info rzg3l_info = {
-	.find_tclk_rate = rzv2h_rspi_find_rate_fixed,
-	.tclk_name = "tclk",
-	.fifo_size = 16,
-	.num_clks = 2,
-};
-
 static const struct rzv2h_rspi_info rzt2h_info = {
 	.find_tclk_rate = rzv2h_rspi_find_rate_variable,
 	.find_pclk_rate = rzv2h_rspi_find_rate_fixed,
@@ -825,7 +826,6 @@ static const struct rzv2h_rspi_info rzt2h_info = {
 };
 
 static const struct of_device_id rzv2h_rspi_match[] = {
-	{ .compatible = "renesas,r9a08g046-rspi", &rzg3l_info },
 	{ .compatible = "renesas,r9a09g057-rspi", &rzv2h_info },
 	{ .compatible = "renesas,r9a09g077-rspi", &rzt2h_info },
 	{ /* sentinel */ }
