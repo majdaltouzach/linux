@@ -1,0 +1,36 @@
+name: Build and Release Kernel Packages
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install build dependencies
+        run: |
+          sudo pacman -Sy --noconfirm --needed \
+            base-devel bc flex bison openssl libelf pahole
+
+      - name: Build kernel packages
+        run: |
+          mkdir -p /tmp/kernel-pkg
+          PKGDEST=/tmp/kernel-pkg MAKEFLAGS="-j$(nproc)" \
+            makepkg --nodeps --nocheck --skipinteg --force
+        working-directory: ${{ github.workspace }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: /tmp/kernel-pkg/linux-jarvisos-*.pkg.tar.zst
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
