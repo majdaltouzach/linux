@@ -1,0 +1,17 @@
+name: Notify Parent on Push
+
+on:
+  push:
+    branches: [stable]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger jarvisos submodule sync
+        run: |
+          curl -s -X POST \
+            -H "Authorization: token ${{ secrets.ORG_PAT }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/JarvisOSLinux/jarvisos/dispatches \
+            -d '{"event_type":"submodule-update","client_payload":{"submodule":"linux-jarvisos"}}'
