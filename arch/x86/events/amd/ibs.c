@@ -15,7 +15,16 @@
 #include <linux/sched/clock.h>
 
 #include <asm/apic.h>
+#include <asm/apicdef.h>
 #include <asm/msr.h>
+
+/* EILVT message type values (renamed in this tree) */
+#ifndef APIC_EILVT_MSG_FIX
+#define APIC_EILVT_MSG_FIX  0
+#endif
+#ifndef APIC_EILVT_MSG_NMI
+#define APIC_EILVT_MSG_NMI  APIC_MODE_NMI
+#endif
 
 #include "../perf_event.h"
 

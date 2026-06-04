@@ -1185,7 +1185,7 @@ int compat_vma_mmap(struct file *file, struct vm_area_struct *vma)
 	if (err)
 		return err;
 
-	set_vma_from_desc(vma, &desc);
+	compat_set_vma_from_desc(vma, &desc);
 	err = mmap_action_complete(vma, &desc.action,
 				   /*is_compat=*/true);
 	if (err) {
@@ -1241,7 +1241,7 @@ void snapshot_page(struct page_snapshot *ps, const struct page *page)
 again:
 	memset(&ps->folio_snapshot, 0, sizeof(struct folio));
 	memcpy(&ps->page_snapshot, page, sizeof(*page));
-	head = ps->page_snapshot.compound_head;
+	head = ps->page_snapshot.compound_info;
 	if ((head & 1) == 0) {
 		ps->idx = 0;
 		foliop = (struct folio *)&ps->page_snapshot;
