@@ -590,8 +590,11 @@ LINUXINCLUDE    := \
 
 KBUILD_AFLAGS   := -D__ASSEMBLY__ -fno-PIE
 
+CC_FLAGS_DIALECT := -std=gnu11
+export CC_FLAGS_DIALECT
+
 KBUILD_CFLAGS :=
-KBUILD_CFLAGS += -std=gnu11
+KBUILD_CFLAGS += $(CC_FLAGS_DIALECT)
 KBUILD_CFLAGS += -fshort-wchar
 KBUILD_CFLAGS += -funsigned-char
 KBUILD_CFLAGS += -fno-common
