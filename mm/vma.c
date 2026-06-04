@@ -7,6 +7,36 @@
 #include "vma_internal.h"
 #include "vma.h"
 
+/* Compatibility shims: old VM_ names renamed to VMA_ in this tree */
+#ifndef VM_IGNORE_MERGE
+# ifdef VMA_IGNORE_MERGE_FLAGS
+#  define VM_IGNORE_MERGE vma_flags_to_legacy(VMA_IGNORE_MERGE_FLAGS)
+# else
+#  define VM_IGNORE_MERGE 0UL
+# endif
+#endif
+#ifndef VM_STICKY
+# ifdef VMA_STICKY_FLAGS
+#  define VM_STICKY vma_flags_to_legacy(VMA_STICKY_FLAGS)
+# else
+#  define VM_STICKY 0UL
+# endif
+#endif
+#ifndef VM_STARTGAP_FLAGS
+# ifdef VMA_STARTGAP_FLAGS
+#  define VM_STARTGAP_FLAGS vma_flags_to_legacy(VMA_STARTGAP_FLAGS)
+# else
+#  define VM_STARTGAP_FLAGS 0UL
+# endif
+#endif
+#ifndef VM_DATA_DEFAULT_FLAGS
+# ifdef VMA_DATA_DEFAULT_FLAGS
+#  define VM_DATA_DEFAULT_FLAGS vma_flags_to_legacy(VMA_DATA_DEFAULT_FLAGS)
+# else
+#  define VM_DATA_DEFAULT_FLAGS 0UL
+# endif
+#endif
+
 struct mmap_state {
 	struct mm_struct *mm;
 	struct vma_iterator *vmi;
