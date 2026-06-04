@@ -5090,10 +5090,12 @@ repeat:
 
 	task = list_entry(it->task_pos, struct task_struct, cg_list);
 	/*
-	 * Hide tasks that are exiting but not yet removed. Keep zombie
-	 * leaders with live threads visible.
+	 * Hide tasks that are exiting but not yet removed by default. Keep
+	 * zombie leaders with live threads visible. Usages that need to walk
+	 * every existing task can opt out via CSS_TASK_ITER_WITH_DEAD.
 	 */
-	if ((task->flags & PF_EXITING) && !atomic_read(&task->signal->live))
+	if (!(it->flags & CSS_TASK_ITER_WITH_DEAD) &&
+	    (task->flags & PF_EXITING) && !atomic_read(&task->signal->live))
 		goto repeat;
 
 	if (it->flags & CSS_TASK_ITER_PROCS) {
@@ -6123,16 +6125,6 @@ static void kill_css_finish(struct cgroup_subsys_state *css)
 	 * confirmed to be seen as killed on all CPUs.
 	 */
 	percpu_ref_kill_and_confirm(&css->refcnt, css_killed_ref_fn);
-
-	css->cgroup->nr_dying_subsys[ss->id]++;
-	/*
-	 * Parent css and cgroup cannot be freed until after the freeing
-	 * of child css, see css_free_rwork_fn().
-	 */
-	while ((css = css->parent)) {
-		css->nr_descendants--;
-		css->cgroup->nr_dying_subsys[ss->id]++;
-	}
 }
 
 /**

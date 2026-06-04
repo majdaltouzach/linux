@@ -750,6 +750,8 @@ static irqreturn_t cmos_interrupt(int irq, void *p)
 
 #include <linux/acpi.h>
 
+bool cmos_rtc_platform_device_present;
+
 static u32 rtc_handler(void *context)
 {
 	struct device *dev = context;
@@ -1133,6 +1135,10 @@ cmos_do_probe(struct device *dev, struct resource *ports, int rtc_irq)
 		 cmos_rtc.century ? ", y3k" : "",
 		 nvmem_cfg.size,
 		 use_hpet_alarm() ? ", hpet irqs" : "");
+
+#ifdef CONFIG_ACPI
+	cmos_rtc_platform_device_present = true;
+#endif
 
 	return 0;
 
