@@ -23,6 +23,8 @@
 #include <asm/mwait.h>
 #include <xen/xen.h>
 
+#define ACPI_PROCESSOR_AGGREGATOR_CLASS	"acpi_pad"
+#define ACPI_PROCESSOR_AGGREGATOR_DEVICE_NAME "Processor Aggregator"
 #define ACPI_PROCESSOR_AGGREGATOR_NOTIFY 0x80
 
 #define ACPI_PROCESSOR_AGGREGATOR_STATUS_SUCCESS	0
@@ -405,15 +407,16 @@ static void acpi_pad_handle_notify(acpi_handle handle)
 	mutex_unlock(&isolated_cpus_lock);
 }
 
-static void acpi_pad_notify(acpi_handle handle, u32 event, void *data)
+static void acpi_pad_notify(acpi_handle handle, u32 event,
+	void *data)
 {
 	struct acpi_device *adev = data;
 
 	switch (event) {
 	case ACPI_PROCESSOR_AGGREGATOR_NOTIFY:
 		acpi_pad_handle_notify(handle);
-		acpi_bus_generate_netlink_event("acpi_pad",
-						dev_name(&adev->dev), event, 0);
+		acpi_bus_generate_netlink_event(adev->pnp.device_class,
+			dev_name(&adev->dev), event, 0);
 		break;
 	default:
 		pr_warn("Unsupported event [0x%x]\n", event);
@@ -423,20 +426,35 @@ static void acpi_pad_notify(acpi_handle handle, u32 event, void *data)
 
 static int acpi_pad_probe(struct platform_device *pdev)
 {
-	struct acpi_device *adev = ACPI_COMPANION(&pdev->dev);
+	struct acpi_device *adev;
+	acpi_status status;
 
-	return acpi_dev_install_notify_handler(adev, ACPI_DEVICE_NOTIFY,
-					       acpi_pad_notify, adev);
+	adev = ACPI_COMPANION(&pdev->dev);
+	if (!adev)
+		return -ENODEV;
+
+	strscpy(acpi_device_name(adev), ACPI_PROCESSOR_AGGREGATOR_DEVICE_NAME);
+	strscpy(acpi_device_class(adev), ACPI_PROCESSOR_AGGREGATOR_CLASS);
+
+	status = acpi_install_notify_handler(adev->handle,
+		ACPI_DEVICE_NOTIFY, acpi_pad_notify, adev);
+
+	if (ACPI_FAILURE(status))
+		return -ENODEV;
+
+	return 0;
 }
 
 static void acpi_pad_remove(struct platform_device *pdev)
 {
+	struct acpi_device *adev = ACPI_COMPANION(&pdev->dev);
+
 	mutex_lock(&isolated_cpus_lock);
 	acpi_pad_idle_cpus(0);
 	mutex_unlock(&isolated_cpus_lock);
 
-	acpi_dev_remove_notify_handler(ACPI_COMPANION(&pdev->dev),
-				       ACPI_DEVICE_NOTIFY, acpi_pad_notify);
+	acpi_remove_notify_handler(adev->handle,
+		ACPI_DEVICE_NOTIFY, acpi_pad_notify);
 }
 
 static const struct acpi_device_id pad_device_ids[] = {

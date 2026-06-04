@@ -417,32 +417,20 @@ int blkdev_report_zones_ioctl(struct block_device *bdev, unsigned int cmd,
 	return 0;
 }
 
-static int blkdev_reset_zone(struct block_device *bdev, blk_mode_t mode,
-			     struct blk_zone_range *zrange)
+static int blkdev_truncate_zone_range(struct block_device *bdev,
+		blk_mode_t mode, const struct blk_zone_range *zrange)
 {
 	loff_t start, end;
-	int ret = -EINVAL;
 
-	inode_lock(bdev->bd_mapping->host);
-	filemap_invalidate_lock(bdev->bd_mapping);
 	if (zrange->sector + zrange->nr_sectors <= zrange->sector ||
 	    zrange->sector + zrange->nr_sectors > get_capacity(bdev->bd_disk))
 		/* Out of range */
-		goto out_unlock;
+		return -EINVAL;
 
 	start = zrange->sector << SECTOR_SHIFT;
 	end = ((zrange->sector + zrange->nr_sectors) << SECTOR_SHIFT) - 1;
 
-	ret = truncate_bdev_range(bdev, mode, start, end);
-	if (ret)
-		goto out_unlock;
-
-	ret = blkdev_zone_mgmt(bdev, REQ_OP_ZONE_RESET, zrange->sector,
-			       zrange->nr_sectors);
-out_unlock:
-	filemap_invalidate_unlock(bdev->bd_mapping);
-	inode_unlock(bdev->bd_mapping->host);
-	return ret;
+	return truncate_bdev_range(bdev, mode, start, end);
 }
 
 /*
@@ -455,6 +443,7 @@ int blkdev_zone_mgmt_ioctl(struct block_device *bdev, blk_mode_t mode,
 	void __user *argp = (void __user *)arg;
 	struct blk_zone_range zrange;
 	enum req_op op;
+	int ret;
 
 	if (!argp)
 		return -EINVAL;
@@ -470,7 +459,15 @@ int blkdev_zone_mgmt_ioctl(struct block_device *bdev, blk_mode_t mode,
 
 	switch (cmd) {
 	case BLKRESETZONE:
-		return blkdev_reset_zone(bdev, mode, &zrange);
+		op = REQ_OP_ZONE_RESET;
+
+		/* Invalidate the page cache, including dirty pages. */
+		inode_lock(bdev->bd_mapping->host);
+		filemap_invalidate_lock(bdev->bd_mapping);
+		ret = blkdev_truncate_zone_range(bdev, mode, &zrange);
+		if (ret)
+			goto fail;
+		break;
 	case BLKOPENZONE:
 		op = REQ_OP_ZONE_OPEN;
 		break;
@@ -484,7 +481,15 @@ int blkdev_zone_mgmt_ioctl(struct block_device *bdev, blk_mode_t mode,
 		return -ENOTTY;
 	}
 
-	return blkdev_zone_mgmt(bdev, op, zrange.sector, zrange.nr_sectors);
+	ret = blkdev_zone_mgmt(bdev, op, zrange.sector, zrange.nr_sectors);
+
+fail:
+	if (cmd == BLKRESETZONE) {
+		filemap_invalidate_unlock(bdev->bd_mapping);
+		inode_unlock(bdev->bd_mapping->host);
+	}
+
+	return ret;
 }
 
 static bool disk_zone_is_last(struct gendisk *disk, struct blk_zone *zone)
@@ -492,12 +497,18 @@ static bool disk_zone_is_last(struct gendisk *disk, struct blk_zone *zone)
 	return zone->start + zone->len >= get_capacity(disk);
 }
 
+static bool disk_zone_is_full(struct gendisk *disk,
+			      unsigned int zno, unsigned int offset_in_zone)
+{
+	if (zno < disk->nr_zones - 1)
+		return offset_in_zone >= disk->zone_capacity;
+	return offset_in_zone >= disk->last_zone_capacity;
+}
+
 static bool disk_zone_wplug_is_full(struct gendisk *disk,
 				    struct blk_zone_wplug *zwplug)
 {
-	if (zwplug->zone_no < disk->nr_zones - 1)
-		return zwplug->wp_offset >= disk->zone_capacity;
-	return zwplug->wp_offset >= disk->last_zone_capacity;
+	return disk_zone_is_full(disk, zwplug->zone_no, zwplug->wp_offset);
 }
 
 static bool disk_insert_zone_wplug(struct gendisk *disk,
@@ -623,6 +634,28 @@ static void disk_mark_zone_wplug_dead(struct blk_zone_wplug *zwplug)
 	}
 }
 
+static inline bool disk_check_zone_wplug_dead(struct blk_zone_wplug *zwplug)
+{
+	if (!(zwplug->flags & BLK_ZONE_WPLUG_DEAD))
+		return false;
+
+	/*
+	 * If a new write is received right after a zone reset completes and
+	 * while the disk_zone_wplugs_worker() thread has not yet released the
+	 * reference on the zone write plug after processing the last write to
+	 * the zone, then the new write BIO will see the zone write plug marked
+	 * as dead. This case is however a false positive and a perfectly valid
+	 * pattern. In such case, restore the zone write plug to a live one.
+	 */
+	if (!zwplug->wp_offset && bio_list_empty(&zwplug->bio_list)) {
+		zwplug->flags &= ~BLK_ZONE_WPLUG_DEAD;
+		refcount_inc(&zwplug->ref);
+		return false;
+	}
+
+	return true;
+}
+
 static bool disk_zone_wplug_submit_bio(struct gendisk *disk,
 				       struct blk_zone_wplug *zwplug);
 
@@ -638,20 +671,23 @@ static void blk_zone_wplug_bio_work(struct work_struct *work)
 }
 
 /*
- * Get a zone write plug for the zone containing @sector.
- * If the plug does not exist, it is allocated and inserted in the disk hash
- * table.
+ * Get a reference on the write plug for the zone containing @sector.
+ * If the plug does not exist, it is allocated and hashed.
+ * Return a pointer to the zone write plug with the plug spinlock held.
  */
-static struct blk_zone_wplug *disk_get_or_alloc_zone_wplug(struct gendisk *disk,
-					sector_t sector, gfp_t gfp_mask)
+static struct blk_zone_wplug *disk_get_and_lock_zone_wplug(struct gendisk *disk,
+					sector_t sector, gfp_t gfp_mask,
+					unsigned long *flags)
 {
 	unsigned int zno = disk_zone_no(disk, sector);
 	struct blk_zone_wplug *zwplug;
 
 again:
 	zwplug = disk_get_zone_wplug(disk, sector);
-	if (zwplug)
+	if (zwplug) {
+		spin_lock_irqsave(&zwplug->lock, *flags);
 		return zwplug;
+	}
 
 	/*
 	 * Allocate and initialize a zone write plug with an extra reference
@@ -673,12 +709,15 @@ again:
 	INIT_LIST_HEAD(&zwplug->entry);
 	zwplug->disk = disk;
 
+	spin_lock_irqsave(&zwplug->lock, *flags);
+
 	/*
 	 * Insert the new zone write plug in the hash table. This can fail only
 	 * if another context already inserted a plug. Retry from the beginning
 	 * in such case.
 	 */
 	if (!disk_insert_zone_wplug(disk, zwplug)) {
+		spin_unlock_irqrestore(&zwplug->lock, *flags);
 		mempool_free(zwplug, disk->zone_wplugs_pool);
 		goto again;
 	}
@@ -1432,7 +1471,7 @@ static bool blk_zone_wplug_handle_write(struct bio *bio, unsigned int nr_segs)
 	if (bio->bi_opf & REQ_NOWAIT)
 		gfp_mask = GFP_NOWAIT;
 
-	zwplug = disk_get_or_alloc_zone_wplug(disk, sector, gfp_mask);
+	zwplug = disk_get_and_lock_zone_wplug(disk, sector, gfp_mask, &flags);
 	if (!zwplug) {
 		if (bio->bi_opf & REQ_NOWAIT)
 			bio_wouldblock_error(bio);
@@ -1441,15 +1480,13 @@ static bool blk_zone_wplug_handle_write(struct bio *bio, unsigned int nr_segs)
 		return true;
 	}
 
-	spin_lock_irqsave(&zwplug->lock, flags);
-
 	/*
-	 * If we got a zone write plug marked as dead, then the user is issuing
-	 * writes to a full zone, or without synchronizing with zone reset or
-	 * zone finish operations. In such case, fail the BIO to signal this
-	 * invalid usage.
+	 * Check if we got a zone write plug marked as dead. If yes, then the
+	 * user is likely issuing writes to a full zone, or without
+	 * synchronizing with zone reset or zone finish operations. In such
+	 * case, fail the BIO to signal this invalid usage.
 	 */
-	if (zwplug->flags & BLK_ZONE_WPLUG_DEAD) {
+	if (disk_check_zone_wplug_dead(zwplug)) {
 		spin_unlock_irqrestore(&zwplug->lock, flags);
 		disk_put_zone_wplug(zwplug);
 		bio_io_error(bio);
@@ -1979,8 +2016,10 @@ static void disk_set_zones_cond_array(struct gendisk *disk, u8 *zones_cond)
 
 void disk_free_zone_resources(struct gendisk *disk)
 {
-	if (disk->zone_wplugs_worker)
+	if (disk->zone_wplugs_worker) {
 		kthread_stop(disk->zone_wplugs_worker);
+		disk->zone_wplugs_worker = NULL;
+	}
 	WARN_ON_ONCE(!list_empty(&disk->zone_wplugs_list));
 
 	if (disk->zone_wplugs_wq) {
@@ -2113,9 +2152,6 @@ commit:
 	ret = queue_limits_commit_update(q, &lim);
 
 unfreeze:
-	if (ret)
-		disk_free_zone_resources(disk);
-
 	blk_mq_unfreeze_queue(q, memflags);
 
 	return ret;
@@ -2184,6 +2220,7 @@ static int blk_revalidate_seq_zone(struct blk_zone *zone, unsigned int idx,
 	struct gendisk *disk = args->disk;
 	struct blk_zone_wplug *zwplug;
 	unsigned int wp_offset;
+	unsigned long flags;
 
 	/*
 	 * Remember the capacity of the first sequential zone and check
@@ -2213,9 +2250,10 @@ static int blk_revalidate_seq_zone(struct blk_zone *zone, unsigned int idx,
 	if (!wp_offset || wp_offset >= zone->capacity)
 		return 0;
 
-	zwplug = disk_get_or_alloc_zone_wplug(disk, zone->wp, GFP_NOIO);
+	zwplug = disk_get_and_lock_zone_wplug(disk, zone->wp, GFP_NOIO, &flags);
 	if (!zwplug)
 		return -ENOMEM;
+	spin_unlock_irqrestore(&zwplug->lock, flags);
 	disk_put_zone_wplug(zwplug);
 
 	return 0;
