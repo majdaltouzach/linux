@@ -81,4 +81,7 @@ static __always_inline u32 get_kstack_offset(void)
 #define add_random_kstack_offset()		do { } while (0)
 #endif /* CONFIG_RANDOMIZE_KSTACK_OFFSET */
 
+struct task_struct;
+static inline void random_kstack_task_init(struct task_struct *p) { }
+
 #endif
