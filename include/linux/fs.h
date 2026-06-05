@@ -2420,14 +2420,18 @@ extern struct kobject *fs_kobj;
 /* fs/open.c */
 struct audit_names;
 
+/* __filename_head kept only for EMBEDDED_NAME_MAX size calculation —
+ * GCC 16 rejects anonymous embedding of a previously-declared struct tag. */
 struct __filename_head {
-	const char		*name;	/* pointer to actual string */
+	const char		*name;
 	int			refcnt;
 	struct audit_names	*aname;
 };
 #define EMBEDDED_NAME_MAX	(192 - sizeof(struct __filename_head))
 struct filename {
-	struct __filename_head;
+	const char		*name;	/* pointer to actual string */
+	int			refcnt;
+	struct audit_names	*aname;
 	const char		iname[EMBEDDED_NAME_MAX];
 };
 static_assert(offsetof(struct filename, iname) % sizeof(long) == 0);
