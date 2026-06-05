@@ -573,6 +573,9 @@ struct acpi_osc_context {
 
 acpi_status acpi_run_osc(acpi_handle handle, struct acpi_osc_context *context);
 
+int acpi_install_cmos_rtc_space_handler(acpi_handle handle);
+void acpi_remove_cmos_rtc_space_handler(acpi_handle handle);
+
 /* Number of _OSC capability DWORDS depends on bridge type */
 #define OSC_PCI_CAPABILITY_DWORDS		3
 #define OSC_CXL_CAPABILITY_DWORDS		5

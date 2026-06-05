@@ -10,6 +10,7 @@
 #include <linux/ftrace.h>
 #include <linux/pkt_sched.h>
 #include <net/sch_generic.h>
+#include <net/dropreason-qdisc.h>
 
 TRACE_EVENT(qdisc_dequeue,
 

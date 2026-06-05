@@ -1887,7 +1887,7 @@ static void __run_hrtimer(struct hrtimer_cpu_base *cpu_base, struct hrtimer_cloc
 	 * is dropped.
 	 */
 	raw_spin_unlock_irqrestore(&cpu_base->lock, flags);
-	trace_hrtimer_expire_entry(timer, now);
+	trace_hrtimer_expire_entry(timer, *now);
 	expires_in_hardirq = lockdep_hrtimer_enter(timer);
 
 	restart = fn(timer);

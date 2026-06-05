@@ -362,6 +362,11 @@ static inline void *snd_soc_component_get_drvdata(struct snd_soc_component *c)
 	return dev_get_drvdata(c->dev);
 }
 
+static inline int snd_soc_component_regmap_val_bytes(struct snd_soc_component *c)
+{
+	return c->val_bytes;
+}
+
 static inline unsigned int
 snd_soc_component_active(struct snd_soc_component *component)
 {

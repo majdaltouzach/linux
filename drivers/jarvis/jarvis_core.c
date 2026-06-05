@@ -40,6 +40,7 @@
 #include <linux/sysfs.h>
 #include <linux/device.h>
 
+#include <linux/jarvis.h>
 #include <uapi/linux/jarvis.h>
 #include "jarvis_dibs.h"
 #include "jarvis_sysmon.h"
@@ -105,7 +106,7 @@ static atomic64_t next_query_id = ATOMIC64_INIT(1);
  */
 int jarvis_post_query(enum jarvis_query_type type, const void *data, u32 len)
 {
-	struct jarvis_qslot slot = {};
+	struct jarvis_qslot *slot;
 	unsigned long flags;
 	int rc;
 
@@ -115,19 +116,25 @@ int jarvis_post_query(enum jarvis_query_type type, const void *data, u32 len)
 	if (!READ_ONCE(daemon_connected))
 		return -ENODEV;
 
-	slot.q.id        = atomic64_fetch_add(1, &next_query_id);
-	slot.q.type      = type;
-	slot.q.len       = len;
-	slot.q.timestamp = ktime_get_ns();
-	memcpy(slot.q.data, data, len);
+	/* Heap-allocated: jarvis_qslot is too large (~4 KiB) for the stack. */
+	slot = kzalloc(sizeof(*slot), GFP_ATOMIC);
+	if (!slot)
+		return -ENOMEM;
+
+	slot->q.id        = atomic64_fetch_add(1, &next_query_id);
+	slot->q.type      = type;
+	slot->q.len       = len;
+	slot->q.timestamp = ktime_get_ns();
+	memcpy(slot->q.data, data, len);
 
 	spin_lock_irqsave(&fifo_lock, flags);
-	rc = kfifo_put(&query_fifo, slot) ? 0 : -ENOSPC;
+	rc = kfifo_in(&query_fifo, slot, 1) ? 0 : -ENOSPC;
 	spin_unlock_irqrestore(&fifo_lock, flags);
 
 	if (!rc)
 		wake_up_interruptible(&query_wq);
 
+	kfree(slot);
 	return rc;
 }
 EXPORT_SYMBOL_GPL(jarvis_post_query);
@@ -147,7 +154,7 @@ int jarvis_query_sync(enum jarvis_query_type type, const void *data, u32 len,
 		      struct jarvis_response *resp, unsigned long timeout)
 {
 	struct jarvis_pending *pend;
-	struct jarvis_qslot slot = {};
+	struct jarvis_qslot *slot;
 	unsigned long flags;
 	long rem;
 	int rc;
@@ -162,22 +169,30 @@ int jarvis_query_sync(enum jarvis_query_type type, const void *data, u32 len,
 	if (!pend)
 		return -ENOMEM;
 
+	/* Heap-allocated: jarvis_qslot is too large (~4 KiB) for the stack. */
+	slot = kzalloc(sizeof(*slot), GFP_KERNEL);
+	if (!slot) {
+		kfree(pend);
+		return -ENOMEM;
+	}
+
 	init_completion(&pend->done);
 	pend->id = atomic64_fetch_add(1, &next_query_id);
 
-	slot.q.id        = pend->id;
-	slot.q.type      = type;
-	slot.q.len       = len;
-	slot.q.timestamp = ktime_get_ns();
-	memcpy(slot.q.data, data, len);
+	slot->q.id        = pend->id;
+	slot->q.type      = type;
+	slot->q.len       = len;
+	slot->q.timestamp = ktime_get_ns();
+	memcpy(slot->q.data, data, len);
 
 	spin_lock_irqsave(&pending_lock, flags);
 	list_add_tail(&pend->node, &pending_list);
 	spin_unlock_irqrestore(&pending_lock, flags);
 
 	spin_lock_irqsave(&fifo_lock, flags);
-	rc = kfifo_put(&query_fifo, slot) ? 0 : -ENOSPC;
+	rc = kfifo_in(&query_fifo, slot, 1) ? 0 : -ENOSPC;
 	spin_unlock_irqrestore(&fifo_lock, flags);
+	kfree(slot);
 
 	if (rc) {
 		spin_lock_irqsave(&pending_lock, flags);
@@ -264,38 +279,42 @@ static int jarvis_release(struct inode *inode, struct file *filp)
 static ssize_t jarvis_read(struct file *filp, char __user *ubuf,
 			   size_t count, loff_t *pos)
 {
-	struct jarvis_qslot slot;
+	struct jarvis_qslot *slot;
 	unsigned long flags;
 	unsigned int copied;
-	int rc;
+	ssize_t ret;
 
-	if (count < sizeof(slot.q))
+	if (count < sizeof(slot->q))
 		return -EINVAL;
 
 	/* Block until data available (or interrupted) */
-	rc = wait_event_interruptible(query_wq,
+	ret = wait_event_interruptible(query_wq,
 		({ spin_lock_irqsave(&fifo_lock, flags);
 		   bool have = !kfifo_is_empty(&query_fifo);
 		   spin_unlock_irqrestore(&fifo_lock, flags);
 		   have; }) || (filp->f_flags & O_NONBLOCK));
 
-	if (rc)
-		return rc;
+	if (ret)
+		return ret;
+
+	/* Heap-allocated: jarvis_qslot is too large (~4 KiB) for the stack. */
+	slot = kmalloc(sizeof(*slot), GFP_KERNEL);
+	if (!slot)
+		return -ENOMEM;
 
 	spin_lock_irqsave(&fifo_lock, flags);
-	copied = kfifo_get(&query_fifo, &slot);
+	copied = kfifo_get(&query_fifo, slot);
 	spin_unlock_irqrestore(&fifo_lock, flags);
 
-	if (!copied) {
-		if (filp->f_flags & O_NONBLOCK)
-			return -EAGAIN;
-		return -EIO;
-	}
+	if (!copied)
+		ret = (filp->f_flags & O_NONBLOCK) ? -EAGAIN : -EIO;
+	else if (copy_to_user(ubuf, &slot->q, sizeof(slot->q)))
+		ret = -EFAULT;
+	else
+		ret = sizeof(slot->q);
 
-	if (copy_to_user(ubuf, &slot.q, sizeof(slot.q)))
-		return -EFAULT;
-
-	return sizeof(slot.q);
+	kfree(slot);
+	return ret;
 }
 
 static __poll_t jarvis_poll(struct file *filp, poll_table *wait)

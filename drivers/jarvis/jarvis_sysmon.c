@@ -14,7 +14,7 @@
  * Interface
  * ---------
  *   ioctl(fd, JARVIS_IOC_SYSMON, struct jarvis_sysmon *)  — one-shot snapshot
- *   /sys/class/misc/jarvis/sysmon/*                        — individual attrs
+ *   /sys/class/misc/jarvis/sysmon/ attrs                   — individual attrs
  *     cpu_load   — CPU 1-min load average × 100
  *     cpu_count  — online CPU count
  *     mem_total  — total RAM MiB

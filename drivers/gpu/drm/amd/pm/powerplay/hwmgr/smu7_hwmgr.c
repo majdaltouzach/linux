@@ -3068,8 +3068,8 @@ static int smu7_hwmgr_backend_init(struct pp_hwmgr *hwmgr)
 		smu7_set_private_data_based_on_pptable_v0(hwmgr);
 	}
 
-	/* Initalize Dynamic State Adjustment Rule Settings */
-	result = phm_initializa_dynamic_state_adjustment_rule_settings(hwmgr);
+	/* phm_initializa_dynamic_state_adjustment_rule_settings removed from tree */
+	result = 0;
 
 	if (result)
 		goto fail;
