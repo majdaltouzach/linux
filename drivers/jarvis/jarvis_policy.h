@@ -7,7 +7,7 @@
 
 #ifdef CONFIG_JARVIS_POLICY
 
-bool jarvis_policy_check(const char *server, const char *tool,
+bool jarvis_policy_check(const char *server, const char *tool, const char *path,
 			 enum jarvis_policy_tier *tier_out);
 long jarvis_policy_ioctl(unsigned int cmd, void __user *uarg);
 int  jarvis_policy_load_defaults(void);
@@ -17,6 +17,7 @@ void jarvis_policy_exit(struct device *parent_dev);
 #else
 
 static inline bool jarvis_policy_check(const char *server, const char *tool,
+					const char *path,
 					enum jarvis_policy_tier *tier_out)
 {
 	*tier_out = JARVIS_TIER_ELEVATED;

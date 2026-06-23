@@ -38,6 +38,7 @@
 #define JARVIS_KEY_ID_LEN        64     /* max key description length          */
 #define JARVIS_KEY_DATA_LEN      512    /* max key value length (API keys)     */
 #define JARVIS_POLICY_PATTERN_LEN 128   /* max server:tool pattern length      */
+#define JARVIS_PATH_LEN          256    /* max filesystem path in policy rules */
 #define JARVIS_THERMAL_MAX_ZONES 16     /* max thermal zones reported          */
 
 /* -----------------------------------------------------------------------
@@ -196,27 +197,36 @@ struct jarvis_sysmon {
 
 /**
  * struct jarvis_policy_entry - one policy rule
- * @pattern: "server:tool" glob pattern (e.g. "ShellMCP:*", "*:delete_file")
- *           Use "*" to match anything in that field.
- * @tier:    jarvis_policy_tier for matching actions
+ * @pattern:     "server:tool" glob pattern (e.g. "ShellMCP:*", "*:delete_file")
+ *               Use "*" to match anything in that field.
+ * @tier:        jarvis_policy_tier for matching actions
  * @ratelimit_per_min: max allowed calls/minute (0 = unlimited)
+ * @path_prefix: optional filesystem path prefix this rule applies to
+ *               (e.g. "/etc", "/boot").  Empty string means any path.
+ *               Prefix "/etc" matches "/etc" and "/etc/..." but not "/etcfoo".
  */
 struct jarvis_policy_entry {
 	__u8  pattern[JARVIS_POLICY_PATTERN_LEN];
 	__u32 tier;
 	__u32 ratelimit_per_min;
+	__u8  path_prefix[JARVIS_PATH_LEN];
 };
 
 /**
  * struct jarvis_policy_check - policy check request / result
  * @server:  server name of the action being checked (input)
  * @tool:    tool name of the action being checked (input)
+ * @path:    target filesystem path of the action, or empty (input)
+ *           When non-empty, path-prefix rules are evaluated in addition
+ *           to server:tool pattern rules.  Path-prefix rules take priority
+ *           (first-match-wins in insertion order).
  * @tier:    resolved tier (output, filled by driver)
  * @allowed: 1 if allowed at current rate, 0 if blocked (output)
  */
 struct jarvis_policy_check {
 	__u8  server[JARVIS_POLICY_PATTERN_LEN];
 	__u8  tool[JARVIS_POLICY_PATTERN_LEN];
+	__u8  path[JARVIS_PATH_LEN];
 	__u32 tier;
 	__u32 allowed;
 };
