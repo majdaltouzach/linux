@@ -6,20 +6,24 @@
  * natural-language events to the JARVIS daemon via jarvis_post_query() and
  * to gate tool execution via jarvis_policy_check().
  *
+ * IS_ENABLED() is used throughout so stubs are provided for both =n and the
+ * caller-side of =m (the module itself sees declarations, not stubs).
+ *
  * Userspace API is in <uapi/linux/jarvis.h>.
  */
 #ifndef _LINUX_JARVIS_H
 #define _LINUX_JARVIS_H
 
+#include <linux/kconfig.h>
 #include <uapi/linux/jarvis.h>
 
-#ifdef CONFIG_JARVIS
+#if IS_ENABLED(CONFIG_JARVIS)
 
 int jarvis_post_query(enum jarvis_query_type type, const void *data, u32 len);
 int jarvis_query_sync(enum jarvis_query_type type, const void *data, u32 len,
 		      struct jarvis_response *resp, unsigned long timeout);
 
-#else /* !CONFIG_JARVIS */
+#else /* CONFIG_JARVIS not set */
 
 static inline int jarvis_post_query(enum jarvis_query_type type,
 				    const void *data, u32 len)
@@ -31,9 +35,9 @@ static inline int jarvis_query_sync(enum jarvis_query_type type,
 				    unsigned long timeout)
 { return -ENODEV; }
 
-#endif /* CONFIG_JARVIS */
+#endif /* IS_ENABLED(CONFIG_JARVIS) */
 
-#ifdef CONFIG_JARVIS_POLICY
+#if IS_ENABLED(CONFIG_JARVIS_POLICY)
 
 bool jarvis_policy_check(const char *server, const char *tool, const char *path,
 			 enum jarvis_policy_tier *tier_out);
@@ -45,9 +49,9 @@ static inline bool jarvis_policy_check(const char *server, const char *tool,
 				       enum jarvis_policy_tier *tier_out)
 { return true; }
 
-#endif /* CONFIG_JARVIS_POLICY */
+#endif /* IS_ENABLED(CONFIG_JARVIS_POLICY) */
 
-#ifdef CONFIG_JARVIS_KEYS
+#if IS_ENABLED(CONFIG_JARVIS_KEYS)
 
 int jarvis_key_lookup(const char *id, char *buf, size_t buflen);
 
@@ -56,6 +60,6 @@ int jarvis_key_lookup(const char *id, char *buf, size_t buflen);
 static inline int jarvis_key_lookup(const char *id, char *buf, size_t buflen)
 { return -ENODEV; }
 
-#endif /* CONFIG_JARVIS_KEYS */
+#endif /* IS_ENABLED(CONFIG_JARVIS_KEYS) */
 
 #endif /* _LINUX_JARVIS_H */
