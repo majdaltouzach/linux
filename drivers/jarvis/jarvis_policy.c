@@ -28,6 +28,19 @@
  *   - Either field may be "*" to match any value.
  *   - No other glob syntax is supported (KISS).
  *
+ * Path-based rules
+ * ----------------
+ * Each rule may carry an optional path_prefix.  When the daemon passes a
+ * non-empty @path in JARVIS_IOC_POLICY_CHECK, path-prefix rules are
+ * evaluated alongside server:tool matching.  A rule fires only when BOTH
+ * its pattern AND its path_prefix match.  An empty path_prefix matches any
+ * path (backward-compatible with existing rules).
+ *
+ * Built-in path rules block writes to sensitive system directories
+ * (/etc, /usr, /boot, /sys, /proc) unconditionally (FORBIDDEN tier).
+ * They are inserted at the head of the table so they take priority over
+ * generic server:tool rules.
+ *
  * Rate limiting
  * -------------
  * Each policy entry carries an optional ratelimit_per_min value.  If > 0,
@@ -60,6 +73,7 @@
 struct policy_rule {
 	struct list_head   node;
 	char               pattern[JARVIS_POLICY_PATTERN_LEN]; /* "server:tool" */
+	char               path_prefix[JARVIS_PATH_LEN];       /* "" = any path */
 	enum jarvis_policy_tier tier;
 	u32                ratelimit_per_min;
 
@@ -83,37 +97,62 @@ static unsigned int rule_count;
  * Built-in default policy rules
  *
  * Order matters: first match wins.
+ * path_prefix == NULL means "match any path" (same as "").
+ * Path rules are inserted first so they take priority over server:tool rules.
  * --------------------------------------------------------------------- */
 static const struct {
 	const char *pattern;
 	enum jarvis_policy_tier tier;
 	u32 ratelimit_per_min;
+	const char *path_prefix; /* NULL = match any path */
 } jarvis_default_policy[] = {
+	/*
+	 * Path-based rules — FORBIDDEN writes to sensitive system directories.
+	 * These only fire when the daemon passes a non-empty path in
+	 * JARVIS_IOC_POLICY_CHECK.  They block ALL servers/tools that attempt
+	 * to write to critical directories, regardless of which MCP server is
+	 * making the request.
+	 */
+	{ "*:*", JARVIS_TIER_FORBIDDEN, 0, "/etc"   },
+	{ "*:*", JARVIS_TIER_FORBIDDEN, 0, "/usr"   },
+	{ "*:*", JARVIS_TIER_FORBIDDEN, 0, "/boot"  },
+	{ "*:*", JARVIS_TIER_FORBIDDEN, 0, "/sys"   },
+	{ "*:*", JARVIS_TIER_FORBIDDEN, 0, "/proc"  },
+	{ "*:*", JARVIS_TIER_FORBIDDEN, 0, "/sbin"  },
+	{ "*:*", JARVIS_TIER_FORBIDDEN, 0, "/bin"   },
+	{ "*:*", JARVIS_TIER_FORBIDDEN, 0, "/lib"   },
+	{ "*:*", JARVIS_TIER_FORBIDDEN, 0, "/lib64" },
+	/* Root's home is dangerous — require explicit confirmation */
+	{ "*:*", JARVIS_TIER_DANGEROUS, 0, "/root"  },
+
+	/*
+	 * Server:tool rules (path_prefix = NULL → match any path).
+	 */
 	/* File reads are safe */
-	{ "FileSystemMCP:read_file",       JARVIS_TIER_SAFE,      0   },
-	{ "FileSystemMCP:list_directory",  JARVIS_TIER_SAFE,      0   },
-	{ "FileSystemMCP:get_file_info",   JARVIS_TIER_SAFE,      0   },
+	{ "FileSystemMCP:read_file",       JARVIS_TIER_SAFE,      0,  NULL },
+	{ "FileSystemMCP:list_directory",  JARVIS_TIER_SAFE,      0,  NULL },
+	{ "FileSystemMCP:get_file_info",   JARVIS_TIER_SAFE,      0,  NULL },
 	/* File writes are elevated — audit logged */
-	{ "FileSystemMCP:write_file",      JARVIS_TIER_ELEVATED,  30  },
-	{ "FileSystemMCP:create_directory",JARVIS_TIER_ELEVATED,  20  },
+	{ "FileSystemMCP:write_file",      JARVIS_TIER_ELEVATED,  30, NULL },
+	{ "FileSystemMCP:create_directory",JARVIS_TIER_ELEVATED,  20, NULL },
 	/* File deletion is dangerous — needs user confirmation */
-	{ "FileSystemMCP:delete_file",     JARVIS_TIER_DANGEROUS, 5   },
-	{ "FileSystemMCP:delete_directory",JARVIS_TIER_DANGEROUS, 2   },
+	{ "FileSystemMCP:delete_file",     JARVIS_TIER_DANGEROUS, 5,  NULL },
+	{ "FileSystemMCP:delete_directory",JARVIS_TIER_DANGEROUS, 2,  NULL },
 	/* Any other filesystem op: elevated */
-	{ "FileSystemMCP:*",               JARVIS_TIER_ELEVATED,  20  },
+	{ "FileSystemMCP:*",               JARVIS_TIER_ELEVATED,  20, NULL },
 	/* Shell: all commands require user confirmation */
-	{ "ShellMCP:run_command",          JARVIS_TIER_DANGEROUS, 20  },
-	{ "ShellMCP:run_script",           JARVIS_TIER_DANGEROUS, 10  },
-	{ "ShellMCP:approve_command",      JARVIS_TIER_ELEVATED,  0   },
-	{ "ShellMCP:deny_command",         JARVIS_TIER_ELEVATED,  0   },
-	{ "ShellMCP:*",                    JARVIS_TIER_DANGEROUS, 20  },
+	{ "ShellMCP:run_command",          JARVIS_TIER_DANGEROUS, 20, NULL },
+	{ "ShellMCP:run_script",           JARVIS_TIER_DANGEROUS, 10, NULL },
+	{ "ShellMCP:approve_command",      JARVIS_TIER_ELEVATED,  0,  NULL },
+	{ "ShellMCP:deny_command",         JARVIS_TIER_ELEVATED,  0,  NULL },
+	{ "ShellMCP:*",                    JARVIS_TIER_DANGEROUS, 20, NULL },
 	/* Code generation / analysis: elevated */
-	{ "CodeGenMCP:*",                  JARVIS_TIER_ELEVATED,  0   },
-	{ "CodeAnalysisMCP:*",             JARVIS_TIER_ELEVATED,  0   },
+	{ "CodeGenMCP:*",                  JARVIS_TIER_ELEVATED,  0,  NULL },
+	{ "CodeAnalysisMCP:*",             JARVIS_TIER_ELEVATED,  0,  NULL },
 	/* Echo server: always safe (used for testing) */
-	{ "EchoMCP:*",                     JARVIS_TIER_SAFE,      0   },
+	{ "EchoMCP:*",                     JARVIS_TIER_SAFE,      0,  NULL },
 	/* Catch-all: anything unknown is elevated */
-	{ "*:*",                           JARVIS_TIER_ELEVATED,  60  },
+	{ "*:*",                           JARVIS_TIER_ELEVATED,  60, NULL },
 };
 
 /* -----------------------------------------------------------------------
@@ -147,6 +186,34 @@ static bool pattern_match(const char *pattern, const char *server, const char *t
 		return false;
 
 	return true;
+}
+
+/* -----------------------------------------------------------------------
+ * Path prefix matching
+ *
+ * Returns true if @path falls under @prefix.
+ * An empty @prefix matches any path (rule applies regardless of path).
+ * An empty @path means no path was supplied; only prefix-less rules fire.
+ *
+ * "/etc"  matches "/etc" and "/etc/passwd" but NOT "/etcfoo".
+ * --------------------------------------------------------------------- */
+
+static bool path_match(const char *prefix, const char *path)
+{
+	size_t plen;
+
+	if (!prefix || !prefix[0])
+		return true;  /* empty prefix = match any path */
+
+	if (!path || !path[0])
+		return false; /* path not supplied, skip path-specific rules */
+
+	plen = strlen(prefix);
+	if (strncmp(path, prefix, plen) != 0)
+		return false;
+
+	/* prefix must end at a path boundary */
+	return path[plen] == '/' || path[plen] == '\0';
 }
 
 /* -----------------------------------------------------------------------
@@ -197,12 +264,18 @@ static bool ratelimit_check(struct policy_rule *rule)
  * jarvis_policy_check - look up the policy tier for a server:tool action
  * @server:   MCP server name
  * @tool:     MCP tool name
+ * @path:     target filesystem path, or NULL/empty if not applicable
  * @tier_out: filled with resolved tier
+ *
+ * Walks the policy table (first-match-wins).  A rule fires when both its
+ * server:tool pattern and its path_prefix match.  Rules with an empty
+ * path_prefix match regardless of @path.  Rules with a non-empty
+ * path_prefix only fire when @path is non-empty and starts with that prefix.
  *
  * Returns true if the action is allowed at the current rate, false if
  * rate-limited or FORBIDDEN.
  */
-bool jarvis_policy_check(const char *server, const char *tool,
+bool jarvis_policy_check(const char *server, const char *tool, const char *path,
 			 enum jarvis_policy_tier *tier_out)
 {
 	struct policy_rule *rule;
@@ -213,11 +286,17 @@ bool jarvis_policy_check(const char *server, const char *tool,
 	list_for_each_entry(rule, &policy_list, node) {
 		if (!pattern_match(rule->pattern, server, tool))
 			continue;
+		if (!path_match(rule->path_prefix, path))
+			continue;
 
 		*tier_out = rule->tier;
 
 		if (rule->tier == JARVIS_TIER_FORBIDDEN) {
-			pr_info("FORBIDDEN: %s:%s\n", server, tool);
+			if (path && path[0])
+				pr_info("FORBIDDEN: %s:%s path=%s\n",
+					server, tool, path);
+			else
+				pr_info("FORBIDDEN: %s:%s\n", server, tool);
 			allowed = false;
 		} else {
 			allowed = ratelimit_check(rule);
@@ -274,7 +353,9 @@ long jarvis_policy_ioctl(unsigned int cmd, void __user *uarg)
 		}
 
 		strscpy(rule->pattern, entry.pattern, sizeof(rule->pattern));
-		rule->tier             = entry.tier;
+		strscpy(rule->path_prefix, entry.path_prefix,
+			sizeof(rule->path_prefix));
+		rule->tier              = entry.tier;
 		rule->ratelimit_per_min = entry.ratelimit_per_min;
 		spin_lock_init(&rule->rl_lock);
 		rule->rl_tokens      = entry.ratelimit_per_min;
@@ -285,8 +366,9 @@ long jarvis_policy_ioctl(unsigned int cmd, void __user *uarg)
 		rule_count++;
 		write_unlock(&policy_lock);
 
-		pr_info("policy added: \"%s\" tier=%u rate=%u/min\n",
-			rule->pattern, rule->tier, rule->ratelimit_per_min);
+		pr_info("policy added: \"%s\" path=\"%s\" tier=%u rate=%u/min\n",
+			rule->pattern, rule->path_prefix,
+			rule->tier, rule->ratelimit_per_min);
 		return 0;
 	}
 
@@ -326,10 +408,12 @@ long jarvis_policy_ioctl(unsigned int cmd, void __user *uarg)
 
 		check.server[sizeof(check.server) - 1] = '\0';
 		check.tool[sizeof(check.tool) - 1]     = '\0';
+		check.path[sizeof(check.path) - 1]     = '\0';
 
-		allowed        = jarvis_policy_check(check.server, check.tool, &tier);
-		check.tier     = tier;
-		check.allowed  = allowed ? 1 : 0;
+		allowed       = jarvis_policy_check(check.server, check.tool,
+						    check.path, &tier);
+		check.tier    = tier;
+		check.allowed = allowed ? 1 : 0;
 
 		if (copy_to_user(uarg, &check, sizeof(check)))
 			return -EFAULT;
@@ -376,8 +460,10 @@ static ssize_t policy_table_show(struct device *dev,
 	list_for_each_entry(rule, &policy_list, node) {
 		const char *tier_str = (rule->tier < ARRAY_SIZE(tier_names))
 					? tier_names[rule->tier] : "?";
-		len += sysfs_emit_at(buf, len, "%-40s  %-10s  %u/min\n",
-				     rule->pattern, tier_str,
+		const char *path_str = rule->path_prefix[0]
+					? rule->path_prefix : "*";
+		len += sysfs_emit_at(buf, len, "%-40s  %-12s  %-12s  %u/min\n",
+				     rule->pattern, tier_str, path_str,
 				     rule->ratelimit_per_min);
 		if (len >= PAGE_SIZE - 80)
 			break;
@@ -418,6 +504,10 @@ int jarvis_policy_load_defaults(void)
 
 		strscpy(rule->pattern, jarvis_default_policy[i].pattern,
 			sizeof(rule->pattern));
+		if (jarvis_default_policy[i].path_prefix)
+			strscpy(rule->path_prefix,
+				jarvis_default_policy[i].path_prefix,
+				sizeof(rule->path_prefix));
 		rule->tier              = jarvis_default_policy[i].tier;
 		rule->ratelimit_per_min = jarvis_default_policy[i].ratelimit_per_min;
 		spin_lock_init(&rule->rl_lock);
