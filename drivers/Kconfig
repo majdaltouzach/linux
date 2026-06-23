@@ -45,6 +45,8 @@ source "drivers/nvme/Kconfig"
 
 source "drivers/misc/Kconfig"
 
+source "drivers/jarvis/Kconfig"
+
 source "drivers/scsi/Kconfig"
 
 source "drivers/ata/Kconfig"
